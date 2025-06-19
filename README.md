@@ -2,36 +2,26 @@
 
 Framework to fuzz native libraries of an Android app
 
-# Fuzzing
+# Requirements
 
-## Requirements
+Droidot uses the arm64 Android emulator with KVM to fuzz arm64 native libraries shipped with apks.
+The steps below assume you are running this on an arm64 machine.
+
+For the artifact evaluation we ran Droidot on an arm64 machine with the 
+NXP Lay-erscape LX2160A CPU.
+
+# Setup
+
+Build the docker:
 ```
-apt-get install adb
-pip3 install -r requirements.txt
+./setup.sh
 ```
 
-For the static analysis (static_analysis/) at least one phone rooted and setup must be connected to the current machine over ADB.
+Spawn a shell in the docker (all following commands assume you are in the docker container shell)
 
-On an x86_64 machine compile afl-fuzz and frida-trace.so
 ```
-cd afl
-./build.sh
+./run.sh
 ```
-
-## Android devices
-
-If on an arm64 machine with kvm use emulators instead of 
-real device (see *emulator/*)
-
-For fuzzing, check the list below:
-
-* All Android devices must be rooted
-
-* All Android devices must have a connection with the central machine through ADB, either over a TCP/IP connection or with multiple USB ports. Steps  to set-up TCP/IP connection (source [here](https://stackoverflow.com/questions/43973838/how-to-connect-multiple-android-devices-with-adb-over-wifi)):
-  1. connect device with USB cable to PC
-  2. `adb -d tcpip 5555`
-  3. `adb connect <device_ip_addr>` and remove USB cable
-  4. repeat for all other devices
 
 ## Preparation
 
@@ -43,28 +33,26 @@ Populate the target_APK folder with the APKs. The structure should be the follow
  ├── APPNAME/
     └── base.apk
 ```
-The python script **apk_download/parse_download_apks.py** may be used to collect apks. The apks are collected by scraping the google play store and downloaded from androzoo. 
 
-Scrape the google play store and download the newest version of the apks:
+### Start Emulator
 
-`python3 apk_download/parse_download_apks.py -gp -uc`
+Start an emulator with: 
+```
+./start_single_emu.py
 
-Download the newest version of a specific apk:
+adb devices # should display at least one emulator (emulator-55XX)
+```
 
-`python3 apk_download/parse_download_apks.py -ds [APPNAME]`
+## Static Analysis
 
-### Static Analysis
+### Argument Value Analysis And JNI Function Offsets
 
-Gather the information to generate useful fuzzing harnesses.
+Extract the information (argument value pass, jni functions and jni function library+offset) 
+for a specific app in the **target_APK/** folder:
 
-(Optional): Run Path senstive callsequence extraction (Phenomenon)
-
-Extract the native function signatures, the corresponding library name, some 
-straightforward soot info and the function offset with the script in **static_analysis/preprocess.py**.
-
-Extract the information for a specific app in the **target_APK/** folder:
-
-`python3 static_analysis/preprocess.py --target [APPNAME] -s -l -f`
+```
+python3 static_analysis/preprocess.py --target [APPNAME] -s -l -f
+```
 
 For more options check the README in **static_analysis/**
 
@@ -80,13 +68,20 @@ After this step the following files should be present (for apps with native func
     └── signatures_libraries_offsets.txt
 ```
 
-### Generate Harnesses
+### Call Sequence Pass
+
+**TODO** 
+
+## Generate Harnesses
 
 With the information on the function signatures, harnesses for these functions can be generated using the script **harness/harness_generator.py**.
 
 Generate harness for a specific app in **target_APK/**:
 
-`python3 harness/harness_generator.py --target [APPNAME]`
+```
+python3 harness/harness_generator.py --target [APPNAME]
+```
+Note that the harness generator has a number of options, check the `run-ablation.sh` script to see which flags were used during the evaluation.
 
 After this step, the following folder structure should be in place. Now all the necessary information for fuzzing is now present.
 
@@ -105,19 +100,13 @@ After this step, the following folder structure should be in place. Now all the 
             └── seeds/ (folder with seeds with the correct input byte structure)
 ```
 
-Note that the harness generator has a bunch of options, which are all about how the harness is generated.
-
 ## Fuzzing
 
-### Testing & Debugging
+Fuzz a specific harness:
 
-To test or debug a harness for a app and native function use the **fuzzing/testing.py** script:
-
-`python3 testing.py --target [APPNAME] --target_function [HARNESS_NAME]`
-
-
-### Fuzzing
-TODO
+``` 
+python3 fuzzing/fuzz.py --target [APPNAME] --target_function [HARNESS_NAME] --device emulator-55XX -t [TIME-TO-FUZZ]
+```
 
 The output is stored in the fuzzing_output folder.
 
@@ -135,11 +124,42 @@ The output is stored in the fuzzing_output folder.
             └── output_deviceid_datetime/
 ```
 
+## Triage
+
+Attempt to reproduce crashes and deduplicate based on backtrace for crashes in the fuzzing_output directory:
+
+```
+python3 fuzzing/triage.py -c --target [APPNAME] --target_function [HARNESS_NAME] -r --device emulator-55XX
+```
+
+Reproduced crashes and backtraces are stored in the reproduced_crashes folder:
+
+```
+ target_APK/
+ ├── APPNAME/
+    └── base.apk
+    └── static_analysis/
+    └── lib/
+    └── signatures_pattern.txt
+    └── signatures_libraries_offsets.txt
+    └── harnesses/
+    └── fuzzing_output/
+        └── fname-signature@cs_number-io_matching_possibility/
+            └── reproduced_crashes/
+```
+
+Debug crashes on the emulator with gdb:
+
+```
+python3 fuzzing/triage.py -d --target [APPNAME] --target_function [HARNESS_NAME] -r --device emulator-55XX
+```
+
+Follow the printed instructions to replay the crashing seed on device with gdb attached to debug the crash.
+
 ## Components
 
 ```
 .
-├── apk_download/
 ├── emulator/
 ├── fuzzing/
 ├── harness/
@@ -150,12 +170,11 @@ The output is stored in the fuzzing_output folder.
 └── README.md
 ```
 
-* **/apk_download**: scripts to scrape the google play store and download apks into the target_APK/ folder
 * **/emulator**: scripts to install and setup the android emulator on an arm64 machine
 * **/fuzzing**: scripts and fuzzing drivers to run/manage the fuzzing campaign over multiple phones
 * **/harness**: harness/seed generation and compilation scripts
 * **/static_analysis**: code to statically anaylze the apks, extract native function signatures corresponding library and the offset
 * **/target_APK**: contains all the downloaded/analyzed apks, the generated harnesses/seeds and fuzzing output
 * **adb.py**: python library to integrate ADB commands
-* **ghidra**: ghidra scripts to get insights into native library
+* **ghidra**: ghidra scripts to get insights into jni native libraries
 * **README.md**: this README
