@@ -1,0 +1,1 @@
+{"Java_VarPropagation_takeInt": [{"parent": ["LVarPropagation;->foo()V"], "param-0": {"constraint": {"type": "constant", "value": "42"}}}, {"parent": ["LVarPropagation;->foo()V"], "param-0": {"constraint": {"type": "constant", "value": "32"}}}]}

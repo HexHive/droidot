@@ -1,0 +1,8 @@
+google_play_scraper
+requests
+networkx
+pygraphviz
+docker
+androguard
+colorist
+gspread

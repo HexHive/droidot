@@ -1,0 +1,15 @@
+{
+    "Java_FilePath_takeString": [
+        {
+            "parent": [
+                "LFilePath;->foo()V"
+            ],
+            "param-0": {
+                "constraint": {
+                    "type": "file path",
+                    "value": "Ljava/io/File;->getAbsolutePath()Ljava/lang/String;"
+                }
+            }
+        }
+    ]
+}

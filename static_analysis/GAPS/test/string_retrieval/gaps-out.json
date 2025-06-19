@@ -1,0 +1,15 @@
+{
+    "Java_StringRetrieval_takeString": [
+        {
+            "parent": [
+                "LStringRetrieval;->foo()V"
+            ],
+            "param-0": {
+                "constraint": {
+                    "type": "constant",
+                    "value": "\\\"{\\\"hey there\\\": 42}\\\""
+                }
+            }
+        }
+    ]
+}

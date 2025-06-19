@@ -1,0 +1,4 @@
+androguard==3.4.0a1
+graphviz==0.20.1
+ipdb==0.13.9
+ipython==7.31.1

@@ -1,0 +1,15 @@
+{
+    "Java_ByteArrayLengthPropagation_takeBytes": [
+        {
+            "parent": [
+                "LByteArrayLengthPropagation;->foo()V"
+            ],
+            "param-0": {
+                "constraint": {
+                    "type": "empty array",
+                    "value": "42"
+                }
+            }
+        }
+    ]
+}

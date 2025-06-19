@@ -1,0 +1,18 @@
+{
+    "fuzz":{
+        "fuzz_full": false,
+        "parallel_instances": 4,
+        "fuzz_time": 600,
+        "poll_time": 10,
+        "fuzz_only_fuzzable": true,
+        "cmplog": 1
+    },
+    "fuzzable_test":{
+        "enabled": true,
+        "fuzzable_time_run_1": 30,
+        "fuzzable_time_run_2": 240,
+        "fuzzable_edge_diff": 10,
+        "cmplog": 1
+    },
+    "nr_emulators": 8
+}

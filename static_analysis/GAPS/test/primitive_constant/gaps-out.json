@@ -1,0 +1,15 @@
+{
+    "Java_PrimitiveConstant_takeInt": [
+        {
+            "parent": [
+                "LPrimitiveConstant;->foo()V"
+            ],
+            "param-0": {
+                "constraint": {
+                    "type": "constant",
+                    "value": "42"
+                }
+            }
+        }
+    ]
+}

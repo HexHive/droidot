@@ -1,0 +1,34 @@
+{
+    "Java_Overloading_takeByte____3B_I": [
+        {
+            "parent": [
+                "LOverloading;->foo()V"
+            ],
+            "param-1": {
+                "constraint": {
+                    "type": "array length",
+                    "value": "param-0"
+                }
+            },
+            "param-0": {
+                "constraint": {
+                    "type": "array",
+                    "value": "23"
+                }
+            }
+        }
+    ],
+    "Java_Overloading_takeByte____3B": [
+        {
+            "parent": [
+                "LOverloading;->foo()V"
+            ],
+            "param-0": {
+                "constraint": {
+                    "type": "empty array",
+                    "value": "23"
+                }
+            }
+        }
+    ]
+}

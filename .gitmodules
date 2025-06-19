@@ -1,0 +1,6 @@
+[submodule "static_analysis/NativeSignatures/jadx"]
+	path = static_analysis/NativeSignatures/jadx
+	url = https://github.com/skylot/jadx.git
+[submodule "fuzzing/gdb/gef"]
+	path = fuzzing/gdb/gef
+	url = https://github.com/hugsy/gef.git

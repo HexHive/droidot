@@ -1,0 +1,15 @@
+{
+    "Java_IntraVarPropagation_takeInt": [
+        {
+            "parent": [
+                "LIntraVarPropagation;->foo()V"
+            ],
+            "param-0": {
+                "constraint": {
+                    "type": "constant",
+                    "value": "42"
+                }
+            }
+        }
+    ]
+}

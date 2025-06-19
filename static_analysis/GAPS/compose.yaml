@@ -1,0 +1,15 @@
+services:
+  gaps-runner:
+    image: gaps:latest
+    platform: linux
+    build:
+      context: .
+      target: gaps
+    environment:
+      WORKDIR: /opt/src
+    volumes:
+      - ./src:/opt/src:ro
+      - ./test:/opt/test:rw
+      - ./io:/opt/io:rw
+      - ./docker/entrypoint.sh:/entrypoint.sh:ro
+      - ../../target_APK:/opt/target_APK:rw

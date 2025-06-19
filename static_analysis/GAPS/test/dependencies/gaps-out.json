@@ -1,0 +1,23 @@
+{
+    "Java_Dependencies_takeInt": [
+        {
+            "parent": [
+                "LDependencies;->foo()V"
+            ],
+            "param-0": {
+                "constraint": {
+                    "type": "native call",
+                    "value": "LDependencies;->returnInt()I"
+                }
+            }
+        }
+    ],
+    "Java_Dependencies_returnInt": [
+        {
+            "parent": [
+                "LDependencies;->foo()V"
+            ],
+            "return-value": "LDependencies;->takeInt(I)V"
+        }
+    ]
+}

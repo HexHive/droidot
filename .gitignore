@@ -1,0 +1,17 @@
+fuzz_check
+log.txt
+__pycache__/
+target_APK/*
+!target_APK/.gitkeep
+.idea
+latest.csv
+latest.csv.gz
+node_modules/
+package.json
+package-lock.json
+static_analysis/*.log
+fuzzing/*.log
+harness/*.log
+library_data.json
+testfile*
+venv

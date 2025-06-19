@@ -1,0 +1,21 @@
+{
+    "Java_ByteArrayExample_takeBytes": [
+        {
+            "parent": [
+                "LByteArrayExample;->foo()V"
+            ],
+            "param-1": {
+                "constraint": {
+                    "type": "array length",
+                    "value": "param-0"
+                }
+            },
+            "param-0": {
+                "constraint": {
+                    "type": "empty array",
+                    "value": "42"
+                }
+            }
+        }
+    ]
+}

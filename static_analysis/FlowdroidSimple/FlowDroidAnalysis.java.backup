@@ -1,0 +1,1079 @@
+import soot.Scene;
+import soot.SootClass;
+import soot.SootMethod;
+import soot.Body;
+import soot.UnitBox;
+import soot.Unit;
+import soot.ValueBox;
+import soot.Value;
+import soot.*;
+import soot.jimple.InvokeExpr;
+import soot.jimple.internal.*;
+import soot.jimple.internal.JAssignStmt.LinkedRValueBox;
+import soot.jimple.infoflow.InfoflowConfiguration;
+import soot.jimple.infoflow.android.InfoflowAndroidConfiguration;
+import soot.jimple.infoflow.android.SetupApplication;
+import soot.jimple.toolkits.callgraph.CallGraph;
+import soot.jimple.toolkits.callgraph.Edge;
+import soot.jimple.ParameterRef;
+import soot.jimple.JimpleBody;
+import soot.jimple.StringConstant;
+import soot.jimple.IntConstant;
+import soot.util.HashChain;
+import soot.jimple.FloatConstant;
+import soot.jimple.StaticFieldRef;
+import soot.options.Options;
+import soot.jimple.LongConstant;
+import soot.jimple.ThisRef;
+
+import java.io.File;
+import java.io.FileOutputStream;
+import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Paths;
+import java.util.*;
+import java.lang.reflect.Modifier;
+import org.json.JSONObject;
+
+public class FlowDroidAnalysis {
+			
+	    private final static String USER_HOME = System.getProperty("user.home");
+	    // for the server
+	    private static String androidJar = "/usr/lib/android-sdk/platforms";
+	    //private static String androidJar = USER_HOME + "/Android/Sdk/platforms";
+	    // the number of forward searches for looking for native calls inside a body
+	    private static int bodyNativeSearchDepth = 3;
+	    // the number of backward searches for building the callsequence
+	    private static int callgraphBackwardSearchDepth = 5;
+	    
+	    public static Map<String, ArrayList<JSONObject>> field2constr = new HashMap<String, ArrayList<JSONObject>>();
+
+	    public static void main(String[] args){
+	    	if(args.length != 2) {
+	    		System.out.println("Usage: [path_to_appfolder] [abcd]");
+	    		System.out.println("	a: finds nataive functions and writes them to singatures_pattern.txt");
+	    		System.out.println("	b: performs CFG based lifecycle analysis for native functions");
+	    		System.out.println("	c: performs CFG based callsequence pass");
+	    		System.out.println("	d: performs CFG based argument constraint analysis arguments");
+	    	}
+	    	long start_time = System.currentTimeMillis() / 1000l;
+	        String appPath = args[0];
+	        String apkPath = appPath + "/base.apk";
+	        String options = args[1];
+	        // Setup InfoFlowConfiguration
+	        InfoflowAndroidConfiguration config = new InfoflowAndroidConfiguration();
+	        config.getAnalysisFileConfig().setTargetAPKFile(apkPath);
+	        config.getAnalysisFileConfig().setAndroidPlatformDir(androidJar);
+	        config.setCodeEliminationMode(InfoflowConfiguration.CodeEliminationMode.NoCodeElimination);
+	        config.setEnableReflection(false);
+	        config.getCallbackConfig().setEnableCallbacks(false);
+	        config.setCallgraphAlgorithm(InfoflowConfiguration.CallgraphAlgorithm.CHA);
+	        config.setMergeDexFiles(true);
+	        // Create SetupApplication from flowdroid
+	        SetupApplication app = new SetupApplication(config);
+	        // need to call this first, otherwise I'm not able to interact with the soot api
+	        // doesn't terminate for larger apps: TODO: play with settings to find something stable
+	        Options.v().set_whole_program(true);
+	        app.constructCallgraph();
+	        long CFG_time = System.currentTimeMillis() / 1000l;
+	        List<SootMethod> nativeMethods = findAllNativeFunctions();
+	        if(options.contains("a")) {	        	
+		        try{
+		        	// write output to path
+		        	String nativeMethods_output = "";
+		        	for(SootMethod nativeMethod : nativeMethods) {
+		        		nativeMethods_output = nativeMethods_output + soot2androlibMethod(nativeMethod) + "\n";
+		        	}
+		        	String signatures_pattern = appPath + "/signatures_pattern_soot.txt";
+		        	FileOutputStream outputStream = new FileOutputStream(signatures_pattern, false);
+		        	byte[] strToBytes = nativeMethods_output.getBytes();
+		            outputStream.write(strToBytes);
+		            outputStream.close();
+		        }
+		        catch (IOException e){
+		            e.printStackTrace();
+		            System.exit(-1);
+		        }
+	        }
+	        if(options.contains("b")) {
+	        	String output_lifecycle = findNativeInLifecycle();
+		        String output_constructor = findNativeInConstructors();
+		        try{
+		        	// write output to path
+		        	String static_analysis = appPath + "/static_analysis";
+		        	Files.createDirectories(Paths.get(static_analysis));
+		        	String lifecycle_output = static_analysis + "/simple_native_in_lifecycle.txt";
+		        	File lifecycle_outputFile = new File(lifecycle_output);
+		        	lifecycle_outputFile.createNewFile();
+		        	FileOutputStream outputStream = new FileOutputStream(lifecycle_output, false);
+		        	byte[] strToBytes = output_lifecycle.getBytes();
+		            outputStream.write(strToBytes);
+		            outputStream.close();
+		            String constructor_output = static_analysis + "/simple_native_in_constructor.txt";
+		        	File constructor_outputFile = new File(constructor_output);
+		        	constructor_outputFile.createNewFile();
+		        	FileOutputStream outputStream2 = new FileOutputStream(constructor_output, false);
+		        	byte[] strToBytes2 = output_constructor.getBytes();
+		        	outputStream2.write(strToBytes2);
+		        	outputStream2.close();
+		        }
+		        catch (IOException e){
+		            e.printStackTrace();
+		            System.exit(-1);
+		        }
+	        }
+	        if(options.contains("c")) {
+	        	//String out = getCallSequences();
+	        }
+	        if(options.contains("d")) {
+	        	System.out.println("===========================Starting Constraints Analysis Pass====================================");
+	        	JSONObject constraints = new JSONObject(); 
+	        	for(SootMethod nativeMethod : nativeMethods) {
+	        		System.out.println("========= Looking for Argument constraints in native method" + nativeMethod + " =========");
+	        		ArrayList<JSONObject> out = findArgumentConstraints(nativeMethod, -1, 0);
+	        		constraints.put(nativeMethod.getName(), out);
+	        	}
+	        	try{
+		        	// write output to path
+		        	String static_analysis = appPath + "/static_analysis";
+		        	Files.createDirectories(Paths.get(static_analysis));
+		        	String constraint_output = static_analysis + "/simple_argument_constraints.txt";
+		        	FileOutputStream outputStream = new FileOutputStream(constraint_output, false);
+		        	byte[] strToBytes = constraints.toString().getBytes();
+		            outputStream.write(strToBytes);
+		            outputStream.close();
+		        }
+		        catch (IOException e){
+		            e.printStackTrace();
+		            System.exit(-1);
+		        }     	
+	        }
+	        long end_time = System.currentTimeMillis() / 1000l;
+	        System.out.println("analysis finished, start_time: " + start_time + " end_time: "+ end_time + " CFG construction time: " + CFG_time);
+	    }
+	    
+	    /*
+	    public static String getCallSequences() {
+	    	List<SootMethod> entryPointMethods = getEntryPoints();
+	    	// build the function call paths, avoid cycles by keeping track of traversed paths
+	    	for (SootMethod entry : entryPointMethods) {
+	    		List<Path> paths = getPaths(entry);
+	    	}
+	    	// for each path create a sequence of all native methods
+	    	// 
+	    	
+	    	
+	    }
+	    
+	    public static List<Path> getPaths(SootMethod startMethod){
+	    	// iterate over the method body, call getPaths for each 
+	    	
+	    }
+	    */
+	    public static String findNativeInLifecycle() {
+	    	// look for native functions in android life cycle functions
+	    	String OutputString = "";
+	        for (SootClass sootClass : Scene.v().getApplicationClasses()) {
+	            for(SootMethod sootMethod : sootClass.getMethods()){
+	                //if(!sootMethod.hasActiveBody()){
+	                    // no active body, skip
+	                    //continue;
+	                //}
+	                LifeCycleClass LCC = getLifeCycleClass(sootMethod);
+	                if(LCC == LifeCycleClass.None) {
+	                	// is not one of the life cycle classes, skip
+	                	continue;
+	                }
+	                // TODO: do some classification on the function type (initialization, destruction...)
+	                List<SootMethod> nativeMethods = findNativeCallsinBody(sootMethod, bodyNativeSearchDepth);
+	                for(SootMethod method : nativeMethods) {
+	                	System.out.println("[+] found native function in lifecycle function: " + method.toString() + "function: " + sootMethod.toString()+ ":" + LCCEnum2String(LCC));
+	                	OutputString += "native_in_lifecycle_function: " + method.toString() + sootMethod.toString() + ":" + LCCEnum2String(LCC) + "\n";
+	                }
+	            }
+	        }
+	        return OutputString;
+	    }
+	    
+	    public static String findNativeInConstructors() {
+        	// look for native functions in constructors => very likely an initialization function
+	    	String OutputString = "";
+	        for (SootClass sootClass : Scene.v().getApplicationClasses()) {
+	            for(SootMethod sootMethod : sootClass.getMethods()){
+	                if(sootMethod.getName().indexOf("<init>")==-1 && sootMethod.getName().indexOf("<clinit>")==-1){
+	                    // not a constructor
+	                    continue;
+	                }
+	                List<SootMethod> nativeMethods = findNativeCallsinBody(sootMethod, 3);	 
+	                for(SootMethod method : nativeMethods) {
+	                	System.out.println("[+] found native function in constructor: " + method.toString() + "class: " + sootMethod.toString());
+	                	OutputString += "native_in_constructors_function: " + method.toString() + sootMethod.toString() + "\n";
+	                }
+	            }   	        
+	        }	  
+	        return OutputString;
+	    }
+	    
+	    public static List<SootMethod> findNativeCallsinBody(SootMethod sootMethod, int depth){
+	    	// look through a methods native body and retrieve the native calls 
+	    	List<SootMethod> output = new ArrayList<>();
+	    	if(depth == 0) {
+	    		return output;
+	    	}
+	    	if(sootMethod.isJavaLibraryMethod()) {
+	    		return output;
+	    	}
+	    	Body body;
+	    	try {
+	    		body = sootMethod.retrieveActiveBody();
+	    	} catch(java.lang.RuntimeException e) {
+	    		// something went wrong, most likely does not have an active body
+	    		System.out.println("[-] something went wrong, while looking for active body, skipping...");
+	    		return output;
+	    	}
+	    	for(Unit unit : body.getUnits()){
+                // figure out what type this is
+	    		// to handle things like a = nativveFunction(), need to 
+	    		// JAssignStmt.rightBox.value.methodRef
+	    		if(unit instanceof JAssignStmt) {
+	    			ValueBox valuebox;
+	    			try {
+	    				valuebox = ((JAssignStmt) unit).getInvokeExprBox();
+	    			} catch(java.lang.RuntimeException e) {
+	    				// if the assignstatement does not have an invokeexpression
+	    				// just skip this unit
+	    				continue;
+	    			}
+	    			if(valuebox instanceof LinkedRValueBox){
+                        Value method2 = valuebox.getValue();
+                        if(method2 instanceof JStaticInvokeExpr || method2 instanceof JVirtualInvokeExpr){
+                            InvokeExpr meethod3 = (InvokeExpr)method2;
+                            SootMethod method = meethod3.getMethod();
+                            SootClass declaringClass = method.getDeclaringClass();
+                            if(declaringClass.getName().indexOf("java.") != -1 || declaringClass.getName().indexOf("android.") != -1){
+                                // we don't care about native functions of the JVM or of android
+                                continue;
+                            }
+                            if(method.isNative()){
+                                output.add(method);
+                                continue;
+                            }
+                            output.addAll(findNativeCallsinBody(method, depth-1));
+                        }                           
+                    }  
+	    		}
+                if(unit instanceof JInvokeStmt){
+                    // it's a function call!
+                    for(ValueBox valuebox : unit.getUseBoxes()){
+                        // look for invokeexpr to extract the method
+                        if(valuebox instanceof InvokeExprBox){
+                            Value method2 = valuebox.getValue();
+                            if(method2 instanceof JStaticInvokeExpr || method2 instanceof JVirtualInvokeExpr){
+                                InvokeExpr meethod3 = (InvokeExpr)method2;
+                                SootMethod method = meethod3.getMethod();
+                                SootClass declaringClass = method.getDeclaringClass();
+                                if(declaringClass.getName().indexOf("java.") != -1 || declaringClass.getName().indexOf("android.") != -1){
+                                    // we don't care about native functions of the JVM or of android
+                                    continue;
+                                }
+                                if(method.isNative()){
+                                    output.add(method);
+                                    continue;
+                                }
+                                output.addAll(findNativeCallsinBody(method, depth-1));
+                            }                           
+                        }                        
+                    }                  
+                }     
+	    	}
+	    	return output;	    		    
+	    } 
+	    
+	    enum LifeCycleClass {
+    	  	None,
+    		Activity,
+    		Fragment,
+    		Service,
+    		ContentProvider
+	    }   
+	    
+	    public static String LCCEnum2String(LifeCycleClass llc) {
+	    	if(llc == LifeCycleClass.Activity) {
+	    		return "android.app.Activity";
+	    	}
+	    	if(llc == LifeCycleClass.Fragment) {
+	    		return "android.app.Fragment";
+	    	}
+	    	if(llc == LifeCycleClass.Service) {
+	    		return "android.app.Service";
+	    	}
+	    	if(llc == LifeCycleClass.ContentProvider) {
+	    		return "android.content.ContentProvider";
+	    	}
+	    	return "none";
+	    }
+
+	    public static LifeCycleClass getLifeCycleClass(SootMethod sootMethod) {
+	    	// check if the method belongs to one of the classes that are affected by the android life cycle
+	    	SootClass sootClass = sootMethod.getDeclaringClass();
+	    	if(sootClass.isInterface()) {
+	    		// superclass of an interface is just object no point in trying to find superclass
+	    		return LifeCycleClass.None;
+	    	}
+	    	while(sootClass.getName() != "java.lang.Object") {
+	    		// follow the parent classes until we find one of the classes involved in the android life cycle
+	    		// if we hit object we terminate
+	    		if(sootClass.getName() == "android.app.Activity") {
+	    			// is the function a lifecycle function ?
+	    			if(sootMethod.getSubSignature().equals("void onCreate(android.os.Bundle)") 
+	    					|| sootMethod.getSubSignature().equals("void onRestart()") 
+	    					|| sootMethod.getSubSignature().equals("void onStart()") 
+	    					|| sootMethod.getSubSignature().equals("void onResume()") 
+	    					|| sootMethod.getSubSignature().equals("void onPause()") 
+	    					|| sootMethod.getSubSignature().equals("void onStop()") 
+	    					|| sootMethod.getSubSignature().equals("void onDestroy()") 
+	    					) {
+		    			return LifeCycleClass.Activity;
+	    			} else {
+	    				return LifeCycleClass.None;
+	    			}
+	    		}
+	    		if(sootClass.getName() == "android.app.Fragment") {
+	    			if(sootMethod.getSubSignature().equals("void onCreate(android.os.Bundle)") 
+	    					|| sootMethod.getSubSignature().equals("void onCreateView(android.view.LayoutInflater,android.view.ViewGroup,android.os.Bundle)") 
+	    					|| sootMethod.getSubSignature().equals("void onViewCreated(android.view.View,android.os.Bundle)") 
+	    					|| sootMethod.getSubSignature().equals("void onActivityCreated(android.os.Bundle)") 
+	    					|| sootMethod.getSubSignature().equals("void onViewStateRestored(android.os.Bundle)") 
+	    					|| sootMethod.getSubSignature().equals("void onStart()") 
+	    					|| sootMethod.getSubSignature().equals("void onResume()") 
+	    					|| sootMethod.getSubSignature().equals("void onPause()") 
+	    					|| sootMethod.getSubSignature().equals("void onStop()") 
+	    					|| sootMethod.getSubSignature().equals("void onSaveInstanceState(android.os.Bundle)") 
+	    					|| sootMethod.getSubSignature().equals("void onDestroyView()") 
+	    					|| sootMethod.getSubSignature().equals("void onDestroy()") 
+	    					) {
+		    			return LifeCycleClass.Fragment;
+	    			} else {
+	    				return LifeCycleClass.None;
+	    			}
+	    		}
+	    		if(sootClass.getName() == "android.app.Service") {
+	    			if(sootMethod.getSubSignature().equals("void onCreate()") 
+	    					|| sootMethod.getSubSignature().equals("int onStartCommand(android.content.Intent,int,int)")
+	    					|| sootMethod.getSubSignature().equals("android.os.IBinder onBind(android.content.Intent)") 
+	    					|| sootMethod.getSubSignature().equals("void onDestroy()") 
+	    					) {
+		    			return LifeCycleClass.Service;
+	    			} else {
+	    				return LifeCycleClass.None;
+	    			}
+	    		}
+	    		if(sootClass.getName() == "android.content.ContentProvider") {
+	    			if(sootMethod.getSubSignature().equals("boolean onCreate()")){
+		    			return LifeCycleClass.ContentProvider;
+	    			} else {
+	    				return LifeCycleClass.None;
+	    			}
+	    		}
+	    		sootClass = sootClass.getSuperclass();
+	    		if(sootClass == null) {
+	    			return LifeCycleClass.None;
+	    		}
+	    	}
+	    	return LifeCycleClass.None;
+	    }
+	    
+	    public static List<SootMethod> findAllNativeFunctions() {
+	    	// look through entire app and find the native functions
+	    	List<SootMethod> nativeMethods = new ArrayList<>();
+	    	for (SootClass sootClass : Scene.v().getClasses()) {
+	            for(SootMethod sootMethod : sootClass.getMethods()){
+	            	if(sootMethod.isNative()) {
+		            	SootClass declaringClass = sootMethod.getDeclaringClass();
+	            		if(declaringClass.getName().indexOf("java.") == -1 && declaringClass.getName().indexOf("android.") == -1){
+	                        // we don't care about native functions of the JVM or of android
+	            			nativeMethods.add(sootMethod);
+	                    }	            		
+	            	}	  
+	            }	          
+	    	}
+	    	return nativeMethods;
+	    }
+	    
+	    public static String findCallsequences(SootMethod method) {
+	    	// follow the call graph up to a certain depth then follow the call sequence back down and track the native calls
+	    	// recursively find the usages, return a list of call sequences
+	    	List<List<Edge>> IncomingEdgeSequences = usageSequenceRecurse(method, callgraphBackwardSearchDepth);
+	    	// need to traverse the list in reverse order
+	    	return null;
+	    }
+	    
+	    
+	    public static List<SootMethod> ExtractNativeFromEdge(Edge edge, int depth){
+	    	// iterate over the edge.src().body, until reaching the edg.tgt() method, follow calls up to depth
+	    	// return all native functions found
+	    	SootMethod srcMethod = edge.src();
+	    	SootMethod dstMethod = edge.tgt();
+	    	List<SootMethod> output = new ArrayList<>();
+	    	if(srcMethod.isJavaLibraryMethod()) {
+	    		return output;
+	    	}
+	    	Body body;
+	    	try {
+	    		body = srcMethod.retrieveActiveBody();
+	    	} catch(java.lang.RuntimeException e) {
+	    		// something went wrong, most likely does not have an active body
+	    		System.out.println("[-] something went wrong, while looking for active body, skipping...");
+	    		return output;
+	    	}
+	    	return output;
+	    }
+	    
+	    
+	    public static ArrayList<JSONObject> findArgumentConstraints(SootMethod method, int specific_index, int depth) {
+	    	ArrayList<JSONObject> argConstraints = new ArrayList<JSONObject>();
+	    	if(depth > callgraphBackwardSearchDepth) {
+	    		// we limit the depth we do the backwards CFG traversal
+	    		return null;
+	    	}
+	    	System.out.println("[*] Looking for Argument constraints in " + method + "for specific index: " + specific_index + " current depth: " + depth);
+	    	if(method.getParameterCount()== 0) {
+	    		System.out.println("[*] no arguments for function: " + method);
+	    		return null;
+	    	}
+	    	// do some bottom up analysis to hopefully get some constraints on the input
+	    	// loop through usages of the method, for each usage look through the arguments and find constraints
+	    	String output = "";
+	    	List<Edge> incomingEdges = findUsage(method);
+	    	if(incomingEdges.size() == 0) {
+	    		System.out.println("[-] no CFG edges for method found " + method);
+	    		return null;
+	    	}
+	    	System.out.printf("[.] Handling %d incoming edges for method %s%n", incomingEdges.size(), method);
+	    	for(Edge edge : incomingEdges) {
+	    		Unit unit = edge.srcUnit();
+	    		List<Value> args = null;
+	    		/* 	Try to extract the argument values of the native function call site
+	    			$y = nativeFunc($a,$b,..), nativeFunc($a,$b,...)
+	    			=> args = [$a, $b]
+	    		*/
+	    		if(unit instanceof JInvokeStmt) {
+	    			JInvokeStmt jstmt = (JInvokeStmt)unit;
+	    			InvokeExpr invokeExpr = jstmt.getInvokeExpr();
+	    			args = invokeExpr.getArgs();
+	    		} else if (unit instanceof JAssignStmt) {
+	    			ValueBox valuebox;
+	    			try {
+	    				valuebox = ((JAssignStmt) unit).getInvokeExprBox();
+	    			} catch(java.lang.RuntimeException e) {
+	    				// if the assignstatement does not have an invokeexpression
+	    				// just skip this unit
+	    				System.out.println("[ERROR] Unable to retrieve assignstatemnt??? "+ unit);
+	    				continue;
+	    			}
+	    			if(valuebox instanceof LinkedRValueBox){
+                        Value method2 = valuebox.getValue();
+                        if(method2 instanceof JStaticInvokeExpr || method2 instanceof JVirtualInvokeExpr || method2 instanceof JSpecialInvokeExpr || method2 instanceof JInterfaceInvokeExpr){
+                            InvokeExpr invokeExpr = (InvokeExpr)method2;
+                            args = invokeExpr.getArgs();
+                        } else {
+                        	System.out.println("[ERROR] Weird Callsite?? "+ unit);
+                        }
+	    			} else {
+	    				System.out.println("[ERROR] Weird Callsite?? 2"+ unit);
+	    			}
+	    		} else {
+	    			// TODO: other cases to handle??
+	    			System.out.println("[ERROR] Unhandled Callsite??? "+ unit);
+	    			System.exit(-1);
+	    		}
+	    		if(args == null) {
+	    			System.out.println("[-] native function without arguments");
+	    			continue;
+	    		}
+	    		int index = 0;
+	    		for(Value argument : args) {
+	    			// specific index -1 means we're looking at all arguments
+	    			// TODO change this to a list to be able to consolidate backwards searches
+	    			if(specific_index != -1 && index != specific_index) {
+	    				index += 1;
+	    				continue;
+	    			}
+	    			JSONObject constraint = findValueConstraint(argument, unit, edge.src().method(), null, depth); 
+	    			JSONObject constr = new JSONObject();
+	    			constr.put("current_method", edge.src().method());
+	    			constr.put("argument", argument.toString());
+	    			constr.put("argument_index", index);
+	    			constr.put("depth", depth);
+	    			constr.put("constraint", constraint);
+	    			argConstraints.add(constr);
+	    			index += 1;
+	    		}
+	    	}
+	    	return argConstraints;
+	    }
+	    
+	    
+	    public static JSONObject findValueConstraint(Value value, Unit original_unit, SootMethod method, Body body, int depth) {
+	    	// original_unit is inside method
+	    	if(depth > callgraphBackwardSearchDepth) {
+	    		// we limit the depth we do the backwards CFG traversal
+	    		return null;
+	    	}
+	    	System.out.printf("[*] findValueConstraints for value: %s, in original_unit: %s, at caller: %s, depth: %d%n", value, original_unit, method, depth);
+	    	// is the argument constant?
+	    	if(value instanceof Immediate && !(value instanceof JimpleLocal)) {
+	    		//output JSON: {"constraint_type": "CONSTANT", "value": argument.toString(), "edge_id": Edge.getHash(), "depth": depth, "type": getType()}
+	    		JSONObject constr = new JSONObject();
+	    		constr.put("constraint_type", "CONSTANT");
+	    		constr.put("value", value.toString());
+	    		constr.put("type", value.getType());
+	    		constr.put("current_method", method);
+	    		constr.put("depth", depth);
+	    		System.out.println("[FOUND] Constant value found: " + value + " depth: " + depth);
+	    		return constr; 
+				//System.out.println("[:)] found constant for native function at index : " + index + method.toString() + argument.toString());
+				//return "native_function_constant: " +method.toString() + ":" + index + ":" + argument.toString() + "\n";
+			}
+	    	else if(value instanceof Immediate && value instanceof JimpleLocal) {
+	    		// the argument is a local variable
+				if (body == null) {
+					// body not yet retrieved
+					try {
+						body = method.retrieveActiveBody();
+					} catch(java.lang.RuntimeException e) {
+			    		// something went wrong, most likely does not have an active body
+			    		System.out.println("[-] something went wrong, while looking for active body, skipping...");
+			    		return null;
+			    	}
+				}
+	    		try {
+		    		// search through the active body of the calling edge and look for some constraints
+		    		String arg_name = value.toString();
+		    		Unit unit = get_unit_for_var_before_unit(body, original_unit, arg_name);
+		    		if(unit != null) {
+		    			if(unit instanceof JAssignStmt) {
+		    				JAssignStmt assignStmt = (JAssignStmt)unit;
+	    					ValueBox rside = assignStmt.getRightOpBox();
+	    					Value rside2 = rside.getValue();
+	    					return HandleAssignment(rside2, unit, method, body, depth, HandleAssignmentType.Normal);
+		    			} 
+		    			else if (unit instanceof JIdentityStmt) {
+		    				JIdentityStmt assignStmt = (JIdentityStmt)unit;
+		    				ValueBox rside = assignStmt.getRightOpBox();
+	    					Value rside2 = rside.getValue();
+	    					return HandleAssignment(rside2, unit, method, body, depth, HandleAssignmentType.Normal);
+		    			}
+		    		} else {
+		    			System.out.println("[ERROR] WTF no assignment found???? "+ arg_name + " "+ body);
+		    		}
+		    		
+		    	} catch(java.lang.RuntimeException e) {
+		    		// something went wrong, most likely does not have an active body
+		    		System.out.println("[-] something went wrong, while looking for active body, skipping...");
+		    		return null;
+		    	}
+			}
+	    	else {
+	    		System.out.println("[ERROR] unhandled argument type???? "+ value);
+	    	}
+	    	return null;
+	    }
+	    
+	    
+	    public static JSONObject findRetValueConstraint(SootMethod method, int depth) {
+	    	System.out.println("[*] Looking for ret value constraints in " + method + " depth: " + depth);
+	    	if(depth > callgraphBackwardSearchDepth) {
+	    		return null;
+	    	}
+	    	Body body;
+			try {
+	    		body = method.retrieveActiveBody();
+	    		JReturnStmt ret_unit = find_return_arg(body);
+	    		Value ret_arg_value = ret_unit.getOp();
+	    		if(ret_arg_value instanceof Immediate && !(ret_arg_value instanceof JimpleLocal)) {
+	    			//output JSON: {"constraint_type": "CONSTANT", "value": argument.toString(), "edge_id": Edge.getHash(), "depth": depth}
+	    			JSONObject constr = new JSONObject();
+		    		constr.put("constraint_type", "CONSTANT");
+		    		constr.put("value", ret_arg_value.toString());
+		    		constr.put("edge_id", -1); //edge id of -1 signifies we're doing forward traversal
+		    		constr.put("type", ret_arg_value.getType());
+		    		constr.put("depth", depth);
+	    			System.out.println("[FOUND] constant: " + ret_arg_value + " depth: " + depth);
+		    		return constr; 
+				}
+	    		String ret_arg_name = ret_arg_value.toString();
+	    		Unit unit = get_unit_for_var_before_unit(body, ret_unit, ret_arg_name);
+	    		if(unit != null) {
+	    			if(unit instanceof JAssignStmt) {
+	    				JAssignStmt assignStmt = (JAssignStmt)unit;
+    					ValueBox rside = assignStmt.getRightOpBox();
+    					Value rside2 = rside.getValue();
+    					// TODO: handle the case when we run in a weird loop...
+    					return HandleAssignment(rside2, unit, null, body, depth, HandleAssignmentType.Forward);
+	    			} else {
+	    				System.out.println("[UNHANDLED] other type of assignemtn for ret type???? " + unit);
+	    			}
+	    		} else {
+	    			System.out.println("[ERROR] Failed to retrieve assignment for ret type: " + body);
+	    		}
+	    	} catch(java.lang.RuntimeException e) {
+	    		// something went wrong, most likely does not have an active body
+	    		System.out.println("[-] something went wrong, while looking for active body, skipping...");
+	    		return null;
+	    	}
+			return null;
+	    }
+	    		
+	    enum HandleAssignmentType {
+    	  	Normal, //part of backwards traversal
+    	  	Forward, //part of forwards traversal
+    	  	NoEdge, //backwards traversal but with no incoming edge
+    	  	EdgeSwitch //for instanceref traversal the edges are switched
+	    };
+	    
+	    
+	    public static JSONObject HandleAssignment(Value rside, Unit assign_unit, SootMethod current_method, Body body, int depth, HandleAssignmentType type) {
+	    	// assign_unit is inside current_method, edge points to current_method
+	    	// Given an assignment in a body, try to get some constraints from this assignment
+	    	// edge: incoming edge, if edge is null, we're doing forward traversal to resolve the return value of a function, if argument comes from 
+	    	//		 calling function just return and notifiy
+	    	//TODO: fix the return values for these!
+	    	System.out.printf("[*] HandleAssignemnt: %s, type: %s, depth: %d%n", assign_unit, type, depth);
+	    	if(depth > callgraphBackwardSearchDepth) {
+	    		// we limit the depth we do the backwards CFG traversal
+	    		return null;
+	    	}
+	    	if (rside instanceof IntConstant) {
+	    		IntConstant rside3 = (IntConstant)rside;
+	    		String intval = rside3.toString();
+	    		//output JSON: {"constraint_type": "CONSTANT", "value": argument.toString(), "edge_id": Edge.getHash(), "depth": depth}
+    			JSONObject constr = new JSONObject();
+	    		constr.put("constraint_type", "CONSTANT");
+	    		constr.put("value", intval);
+	    		constr.put("current_method", current_method);
+	    		constr.put("type", rside.getType());
+	    		constr.put("depth", depth);
+	    		System.out.println("[FOUND] int constant: " + intval + " depth: " + depth);
+	    		return constr;
+	    	}
+	    	else if(rside instanceof JLengthExpr) {
+				// handle lengthof case
+				JLengthExpr rside3 = (JLengthExpr)rside;
+				String lengthof_arg = rside3.getOpBox().getValue().toString();
+				JSONObject constr = new JSONObject();
+	    		constr.put("constraint_type", "LENGTHOF");
+	    		constr.put("lengthof", lengthof_arg); //doing cross-correlation we should be able to determine the path of the argument
+	    		constr.put("current_method", current_method);
+	    		constr.put("type", "int");
+	    		constr.put("depth", depth);
+	    		System.out.println("[FOUND?] lengthof: " + lengthof_arg + " depth: " + depth);
+	    		return constr;
+			}
+			else if(rside instanceof JInstanceFieldRef) {
+				// NOT IMPLEMENTED
+				// handle the case when the value is a class attribute
+				JInstanceFieldRef rside3 = (JInstanceFieldRef)rside;
+				SootFieldRef fref = rside3.getFieldRef();
+				SootClass Class = fref.declaringClass();
+				String fieldName = fref.name();
+				SootField sootF = fref.resolve();
+				int a = sootF.getModifiers();
+				//TODO: implement a search over all bodies to find assignments for this field...
+				System.out.println("[.] Rside is fieldref" + rside + " depth: " + depth);
+				// iterate over the functions in the target class, look through the activebody and find assignments to the fieldref
+				// this is not ideal since a public field may get assigned outside of class methods, however to support this we'd need to iterate all function bodies.
+				JSONObject constr = new JSONObject();
+				// TODO: figure out how this works?
+	    		constr.put("constraint_type", "FIELDREF");
+	    		constr.put("fieldname", fieldName);
+	    		constr.put("class", Class.getName());
+	    		constr.put("current_method", current_method); 
+	    		constr.put("depth", depth);
+	    		if(!field2constr.containsKey(fref.toString())) {
+	    			System.out.println("[.] Looking for assigments to fieldref" + fref);
+	    			// we haven't looked for this fieldref before
+	    			ArrayList<JSONObject> instanceRefConstr = new ArrayList<JSONObject>();
+					for(SootMethod method : Class.getMethods()) {
+						// if no incoming edges, check if function maybe clinit, init -> ok otherwise we expect at least one incoming edge
+						Body ClassMethBody = null;
+						try {
+				    		ClassMethBody = method.retrieveActiveBody();
+						} catch(java.lang.RuntimeException e) {
+							System.out.println("[-] Failed to retrieve the function body");
+							continue;
+						}
+				    	// try to find the assignment to the function
+				    	Unit unit = find_instanceRefAssignment(ClassMethBody, fref);
+				    	if(unit == null) {
+				    		// assignment not found
+				    		continue;
+				    	}
+				    	Value rside_instanceref = null;
+				    	if(unit instanceof JAssignStmt) {
+			    			JAssignStmt assignStmt = (JAssignStmt)unit;
+		    				ValueBox rside_tmp = assignStmt.getRightOpBox();
+		    				rside_instanceref = rside_tmp.getValue();
+			    		} 
+			    		else if (unit instanceof JIdentityStmt) {
+			    			JIdentityStmt assignStmt = (JIdentityStmt)unit;
+			    			ValueBox rside_tmp = assignStmt.getRightOpBox();
+		    				rside_instanceref = rside_tmp.getValue();
+			    		} else {
+			    			System.out.println("[ERROR] Failed to retrieve assignment for ret type: " + ClassMethBody);
+			    			continue;
+			    		}
+				    	System.out.printf("[.] assignment found for %s, at caller: %s%n", fref, method);
+				    	// for each incoming call edge call handleassignment
+				    	instanceRefConstr.add(HandleAssignment(rside_instanceref, unit, method, ClassMethBody, depth+1, HandleAssignmentType.Normal));
+					}
+					field2constr.put(fref.toString(), instanceRefConstr);
+	    		}
+				constr.put("constraint", field2constr.get(fref.toString())); 
+				return constr;
+			}
+			else if (rside instanceof StaticFieldRef) {
+				StaticFieldRef rside3 = (StaticFieldRef) rside;
+				SootFieldRef fref = rside3.getFieldRef();
+				SootClass Class = fref.declaringClass();
+				SootField sootF = fref.resolve();
+				System.out.println("[UNHANDLED] Argument is static field ref, IMPLEMENT THIS YOU LAZY DICK!! " + rside + " depth: " + depth);
+				// iterate over the functions in the target class, look through the activebody and find assignments to the fieldref
+				for(SootMethod method : Class.getMethods()) {
+					System.out.println(method);
+				}
+				return null;
+			}
+			else if(rside instanceof JVirtualInvokeExpr || rside instanceof JStaticInvokeExpr || rside instanceof JSpecialInvokeExpr) {
+				// handle the case when the assignemtn is a function call
+				SootMethod rside_meth;
+				if(rside instanceof JVirtualInvokeExpr) {
+					JVirtualInvokeExpr rside3 = (JVirtualInvokeExpr)rside;
+					rside_meth = rside3.getMethod();
+				} else if (rside instanceof JSpecialInvokeExpr){
+					JSpecialInvokeExpr rside3 = (JSpecialInvokeExpr)rside;
+					rside_meth = rside3.getMethod();
+				}else {
+					JStaticInvokeExpr rside3 = (JStaticInvokeExpr)rside;
+					rside_meth = rside3.getMethod();
+				}
+				String rcls = rside_meth.getDeclaringClass().toString();
+				String rfname = rside_meth.getName().toString();
+				if(is_filepath(rcls, rfname)) {
+					System.out.println("[FOUND] filepath constraint "+ rside + " depth: " + depth);
+					// output JSON: {"constraint_type": "FILEPATH", "edge_id": edge.getHash(), "depth": depth}
+					JSONObject constr = new JSONObject();
+		    		constr.put("constraint_type", "FILEPATH");
+		    		constr.put("current_method", current_method); 
+		    		constr.put("type", "String");
+		    		constr.put("depth", depth);
+					return constr; 
+					//System.out.println("[!] filepath constraint" + method.toString() + "found a filepath constraint for arg at index: " + index);
+					//return "[!] filepath constraint" + method.toString() + "found a filepath constraint for arg at index: " + index;
+				}
+				else if(rside_meth.isJavaLibraryMethod()) {
+					// argument is the output of a Java library method, maybe helps to constraint the input space
+					System.out.println("[-] java library ret value constraint "+ rside + " depth: " + depth);
+					JSONObject constr = new JSONObject();
+		    		constr.put("constraint_type", "JAVALIBRARYCALL");
+		    		constr.put("fname", rside_meth.getName().toString());
+		    		constr.put("fclass", rcls);
+		    		constr.put("current_method", current_method); 
+		    		constr.put("type", rside_meth.getReturnType().toString()); 
+		    		constr.put("depth", depth);
+					return constr;
+				}
+				else if(rside_meth.isNative()) {
+					// argument is the return value of a native call
+					System.out.println("[FOUND] arg constraint comes from native call "+ rside + " depth: " + depth);
+					JSONObject constr = new JSONObject();
+		    		constr.put("constraint_type", "NATIVEFUNCTIONCALL");
+		    		constr.put("fname", rside_meth.getName().toString());
+		    		constr.put("fclass", rcls);
+		    		constr.put("current_method", current_method); 
+		    		constr.put("type", rside_meth.getReturnType().toString()); 
+		    		constr.put("depth", depth);
+					return constr;
+				}
+				// TODO handle more invoke cases!! (like android. ... functions)
+				else{
+					// argument is the return value of a generic function
+					System.out.println("[.] Handling a generic function" + rside_meth + " depth: " + depth);
+					JSONObject retValueConst = findRetValueConstraint(rside_meth, depth+1);
+					// TODO: does it depend on an argument given in this function...
+					return retValueConst;
+				}
+			} 
+			else if (rside instanceof ParameterRef) {
+				// arg = @parameterX
+				// look at parent method, repeat findArgumentConstraint for the parent method call
+				ParameterRef rside3 = (ParameterRef)rside;
+				int param_ind = rside3.getIndex();
+				if(type==HandleAssignmentType.Forward) {
+					// we're doing forward traversal, skip this
+					System.out.println("[WEIRD] We're doing forward traversal, but the assignment comes from a function call");
+					// Just return the fact that the constraint is an parameter
+					JSONObject constr = new JSONObject();
+		    		constr.put("constraint_type", "PARAMETERREFLOOP");
+		    		constr.put("param_ind", param_ind);
+		    		constr.put("current_method", current_method); 
+		    		constr.put("depth", depth);
+					return constr;
+				}else {
+					System.out.printf("[.] Handling ParameterRef at index %d, in caller: %s, depth: %d%n", param_ind, current_method, depth);
+					ArrayList<JSONObject> ArgConstr = findArgumentConstraints(current_method, param_ind, depth+1);
+					// TODO, if multiple callsites this possibly returns a list of constraints, need to handle that
+					JSONObject constr = new JSONObject();
+		    		constr.put("constraint_type", "PARAMETERREF");
+		    		constr.put("param_ind", param_ind);
+		    		constr.put("constraint", ArgConstr);
+		    		constr.put("current_method", current_method); 
+		    		constr.put("depth", depth);
+					return constr;
+				}
+			}
+			else if (rside instanceof JimpleLocal) {
+				JimpleLocal loc = (JimpleLocal)rside;
+				String var_name = loc.getName();
+				Unit unit = get_unit_for_var_before_unit(body, assign_unit, var_name);
+				if(unit != null) {
+	    			if(unit instanceof JAssignStmt) {
+	    				JAssignStmt assignStmt = (JAssignStmt)unit;
+    					ValueBox rside3 = assignStmt.getRightOpBox();
+    					Value rside4 = rside3.getValue();
+    					System.out.println("[.] Handling assignment: " + rside + " depth: " + depth);
+    					return HandleAssignment(rside4, unit, current_method, body, depth, HandleAssignmentType.Normal);
+	    			} 
+	    			else if (unit instanceof JIdentityStmt) {
+	    				JIdentityStmt assignStmt = (JIdentityStmt)unit;
+	    				ValueBox rside3 = assignStmt.getRightOpBox();
+    					Value rside4 = rside3.getValue();
+    					System.out.println("[.] Handling assignment: " + rside + " depth: " + depth);
+    					return HandleAssignment(rside4, unit, current_method, body, depth, HandleAssignmentType.Normal);
+	    			}
+	    		} else {
+	    			System.out.println("[ERROR] WTF no assignment found???? "+ var_name + " "+ body);
+	    		}
+			}
+			else  if (rside instanceof JNewExpr) {
+				// TODO not really a way to handle this unless it's a supported type 
+				//         $r16 = new android.view.Surface;r1 = $r16;specialinvoke $r16.<android.view.Surface: void <init>(android.graphics.SurfaceTexture)>($r10);
+				System.out.println("[UNHANDLED] Unhandled assignment of constructor.." + rside + " depth: " + depth);
+			}
+			else if (rside instanceof JNewArrayExpr) {
+				Value size = ((JNewArrayExpr) rside).getSize();
+				System.out.printf("[.] JNewArrayExpr looking for constriants for size: %s, assign_unit: %s%n", size, assign_unit);
+				JSONObject size_constr = findValueConstraint(size, assign_unit, current_method, body, depth);
+				// TODO: maaaybe do forward traversal to see if values are assigned to this array
+				// TODO: merge the constraints together
+				System.out.println("[FOUND] JNewArrayExpr, found size constr for " + rside + "size constr: " + size_constr + " depth: " + depth);
+				// output JSON: {"constraint_type": "NEWARRAY", size_constr = [], "edge_id": edge.getHash(), "depth": depth}
+				JSONObject constr = new JSONObject();
+	    		constr.put("constraint_type", "NEWARRAY");
+	    		constr.put("size_constraints", size_constr);
+	    		constr.put("current_method", current_method); 
+	    		constr.put("type", rside.getType());
+	    		constr.put("depth", depth);
+	    		return constr;
+			} 
+			else if (rside instanceof JCastExpr) {
+				// no clue how to handle this...
+				System.out.println("[UNHANDLED] JCastExpr: " + rside + " depth: " + depth);
+			}
+			else if (rside instanceof FloatConstant) {
+				String float_v = rside.toString();
+				System.out.println("[FOUND] Float constant found " + float_v + " depth: " + depth);
+				//output JSON: {"constraint_type": "CONSTANT", "value": argument.toString(), "edge_id": Edge.getHash(), "depth": depth}
+    			JSONObject constr = new JSONObject();
+	    		constr.put("constraint_type", "CONSTANT");
+	    		constr.put("value", float_v);
+	    		constr.put("current_method", current_method); 
+	    		constr.put("type", rside.getType());
+	    		constr.put("depth", depth);
+				return constr;
+			}
+			else if (rside instanceof LongConstant) {
+				String long_v = rside.toString();
+				System.out.println("[FOUND] Long constant found " + long_v + " depth: " + depth);
+				//output JSON: {"constraint_type": "CONSTANT", "value": argument.toString(), "edge_id": Edge.getHash(), "depth": depth}
+    			JSONObject constr = new JSONObject();
+	    		constr.put("constraint_type", "CONSTANT");
+	    		constr.put("value", long_v);
+	    		constr.put("current_method", current_method);
+	    		constr.put("type", rside.getType());
+	    		constr.put("depth", depth);
+				return constr;
+			}
+			else if (rside instanceof JArrayRef) {
+				System.out.println("[UNHANDLED] JArrayRef: " + rside + " depth: " + depth);
+			}
+			else if (rside instanceof StringConstant) {
+				StringConstant rside3 = (StringConstant)rside;
+				//output JSON: {"constraint_type": "CONSTANT", "value": argument.toString(), "edge_id": Edge.getHash(), "depth": depth}
+    			JSONObject constr = new JSONObject();
+	    		constr.put("constraint_type", "CONSTANT");
+	    		constr.put("value", rside3.toString());
+	    		constr.put("current_method", current_method);
+	    		constr.put("type", rside3.getType());
+	    		constr.put("depth", depth);
+				System.out.println("[FOUND] String constant found: " + rside + " depth: " + depth);
+				return constr;
+			} else if (rside instanceof ThisRef) {
+				System.out.println("[UNHANDLED] ThisRef: " + rside + " depth: " + depth);
+			}
+			else if (rside instanceof JInterfaceInvokeExpr) {
+				// TODO: how do I handle this, figure out implementing interface
+				System.out.println("[UNHANDLED] JInterfaceInvokeExpr: " + rside + " depth: " + depth);
+			// For the following expressions, check if all components of the equation either depend on other arguments or 
+			} else if (rside instanceof JDivExpr) {
+				System.out.println("[UNHANDLED] JDivExpr: " + rside + " depth: " + depth);
+			} else if (rside instanceof JAddExpr) {
+				System.out.println("[UNHANDLED] JAddExpr: " + rside + " depth: " + depth);
+			} else if (rside instanceof JSubExpr) {
+				System.out.println("[UNHANDLED] JSubExpr: " + rside + " depth: " + depth);
+			} else if (rside instanceof JMulExpr) {
+				System.out.println("[UNHANDLED] JMulExpr: " + rside + " depth: " + depth);
+			} else if (rside instanceof JRemExpr) {
+				System.out.println("[UNHANDLED] JRemExpr: " + rside + " depth: " + depth);
+			} else if (rside instanceof JShlExpr) {
+				System.out.println("[UNHANDLED] JShlExpr: " + rside + " depth: " + depth);
+			} else if (rside instanceof JNegExpr) {
+				System.out.println("[UNHANDLED] JNegExpr: " + rside + " depth: " + depth);
+			} else if (rside instanceof JXorExpr) {
+				System.out.println("[UNHANDLED] JXorExpr: " + rside + " depth: " + depth);
+			} else if (rside instanceof JOrExpr) {
+				System.out.println("[UNHANDLED] JOrExpr: " + rside + " depth: " + depth);
+			}
+			else {
+				System.out.println("[ERROR] Unknown right side assignment??? " + rside + " depth: " + depth);
+				return null;
+			}
+	    	return null;
+	    }
+
+	    
+	    public static Unit find_instanceRefAssignment(Body body, SootFieldRef fref) {
+	    	// just look for the first unit that assigns something to the field ref
+	    	for(Unit unit : body.getUnits()){
+	    		if(unit.toString().contains(fref.toString() + " =")) {
+	    			return unit;
+	    		}
+	    	}
+	    	return null;
+	    }
+	    
+	    
+	    public static Unit get_unit_for_var_before_unit(Body body, Unit targetUnit, String arg_name) {
+	    	String assign_arg = arg_name + " =";
+	    	String id_arg = arg_name + " :=";
+	    	Unit mostrecentUnit = null;
+	    	for(Unit unit : body.getUnits()){
+	    		if(unit.toString().equals(targetUnit.toString())) {
+	    			break;
+	    		}
+	    		if(unit.toString().contains(assign_arg)) {
+	    			mostrecentUnit = unit;
+	    		}
+	    		if(unit.toString().contains(id_arg)) {
+	    			mostrecentUnit = unit;
+	    		}
+	    	}
+	    	return mostrecentUnit;
+	    }
+	    
+	    public static JReturnStmt find_return_arg(Body body) {
+	    	for(Unit unit : body.getUnits()){
+	    		if( unit instanceof JReturnStmt) {
+	    			return (JReturnStmt)unit;
+	    		}
+	    	}	
+	    	return null;
+	    }
+	    
+	    public static boolean is_filepath(String cls, String method) {
+	    	if(cls.equals("java.io.File")) {
+	    		if(method.equals("getPath") || method.equals("getAbsolutePath") || method.equals("getCanonicalPath") 
+	    				|| method.equals("getAbsoluteFile")) {
+	    			return true;
+	    		}
+	    	}
+	    	return false;
+	    }
+	    
+	    public static int find_in_args(List<Value> args, String search_arg){
+	    	int i = 0;
+	    	for(Value arg : args){
+	    		if(search_arg == arg.toString()) return i;
+	    		i ++;
+	    	}
+	    	return -1;
+	    }
+	    
+	    public static List<List<Edge>> usageSequenceRecurse(SootMethod method, int depth){
+	    	// follow the edges up, returns a list of call sequences
+	    	List<List<Edge>> allSequences = new ArrayList<>();
+	    	if(depth == 0) {
+	    		allSequences.add(new ArrayList<Edge>());
+	    		return allSequences;
+	    	}
+	    	List<Edge> incomingEdges = findUsage(method);
+	    	for(Edge inc : incomingEdges) {
+	    		SootMethod parent = inc.src();
+	    		List<List<Edge>> sequenceList = usageSequenceRecurse(parent, depth-1);
+	    		for(List<Edge> callsequence : sequenceList) {
+	    			// add the current edge to the callsequence list at the beginning
+	    			callsequence.add(0, inc);
+	    		}
+	    		allSequences.addAll(sequenceList);
+	    	}
+	    	return allSequences;
+	    }
+	    
+	    public static List<SootMethod> getEntryPoints(){
+	    	List<SootMethod> entryPoints = new ArrayList<>();
+	    	CallGraph callgraph = Scene.v().getCallGraph();
+	    	for (SootClass sootClass : Scene.v().getClasses()) {
+	            for(SootMethod sootMethod : sootClass.getMethods()){
+	            	if(callgraph.isEntryMethod(sootMethod)) {
+	            		entryPoints.add(sootMethod);            		
+	            	}	  
+	            }	          
+	    	}
+	    	return entryPoints;
+	    }
+	    
+	    public static List<Edge> findUsage(SootMethod method){
+	    	// find out where the method is used
+	    	List<Edge> incomingEdges = new ArrayList<Edge>();
+	    	CallGraph callgraph = Scene.v().getCallGraph();
+	    	Iterator<Edge> it = callgraph.edgesInto(method);
+	    	while(it.hasNext()) {
+	    		Edge edge = it.next();
+	    		incomingEdges.add(edge);
+	    	}
+	    	return incomingEdges;
+	    }
+	  	    
+	    public static String soot2androlibMethod(SootMethod method) {
+	    	// convert a sootMethod to the mangeld Java JNI name + list of arguments. 
+	    	// same as output from jadx + qdox
+	    	String prefix = "Java";
+	    	String className = method.getDeclaringClass().getName();
+	    	className = className.replace("_", "_1");
+	    	className = className.replace(".", "_");
+	    	String functionName = method.getName();
+	    	functionName = functionName.replace("_", "_1");
+	    	String returnType = getBaseType(method.getReturnType().toString());
+	    	String arguments = "";
+	    	for(Type param : method.getParameterTypes()) {
+	    		arguments = arguments + getBaseType(param.toString()) + ",";
+	    	}	
+	    	return prefix + "_"  + className + "_" + functionName + " " + returnType + ":" + arguments;
+	    }
+	    
+	    public static String getBaseType(String type) {
+	    	// split string and get the last element java.lang.String -> String
+	    	return type.substring(type.lastIndexOf('.') + 1);
+	    }
+}
+

@@ -1,0 +1,331 @@
+# use it with:
+# analyzeHeadless $(mktemp -d) HeadlessAnalysis -overwrite -import <file> -scriptPath $(pwd) -postscript ghidra_dump_native_calls.py
+import re
+import os
+from argparse import ArgumentParser
+import json
+import subprocess
+
+from  ghidra.app.decompiler import DecompInterface
+from ghidra.util.task import ConsoleTaskMonitor
+from ghidra.program.model.address import Address
+from ghidra.program.model.address import DefaultAddressFactory 
+
+from jni_convert import convert
+
+# analyzeHeadless $(mktemp -d) HeadlessAnalysis -overwrite -import ../target_APK/hellolibs2/lib/arm64-v8a/libhello-libs.so -scriptPath $(pwd) -postscript ghidra_dump_native_calls.py ++app_path ../target_APK/hellolibs ++output helloout.txt
+
+# no symbols (isn't able to handle cases where one argument is converted to another => but ok since without symbols this is never used anyways
+jni_regex_nosymb = r"([_a-zA-Z0-9]+ = )?(?:\([A-Za-z0-9]+ ?\*?\))?\(\*\*\(code \*\*\)\(\*param_1 \+ ((?:0x)?[a-fA-F0-9]+)\)\)\((.*)\)"
+# with symobls
+jni_regex_symb = r"([_a-zA-Z0-9]+ = )?_JNIEnv::([A-Za-z0-9]+)\(([^\)]+)\)"
+# => set some options then get the param1 usages and analyze that function
+
+function_calls = r"([^ ,\)\*]+)(\([a-z_A-Z0-9,&*\(\)]+\))"
+
+arg_parser = ArgumentParser(description="Opcode statistical analysis", prog='script',
+                            prefix_chars='+')
+arg_parser.add_argument('+o', '++output', required=True, help='Output file for JSON')
+arg_parser.add_argument('+p', '++app_path', required=True, help='Path to app')
+args = arg_parser.parse_args(args=getScriptArgs())
+
+
+if not os.path.exists(args.output):
+    os.system("mkdir " + args.output)
+
+
+def demangle(name):
+    args = ['c++filt']
+    args.extend(name)
+    pipe = subprocess.Popen(args, stdin=subprocess.PIPE, stdout=subprocess.PIPE)
+    stdout, _ = pipe.communicate()
+    demangled = stdout.split(b"\n")
+    return demangled.decode()
+
+
+def parse_sig_lib_offsets(filepath, libname):
+    """
+    parse the content of the signatures_libraries_offsets.txt file
+    returns a list of functionInfo objects
+    """
+    if libname.endswith("_nocov"):
+        libname = libname.split("_nocov")[0]
+    output_list = {}
+    sigs_libs_offsets = open(filepath).read().split("\n")
+    # TODO: handle overloading
+    for line in sigs_libs_offsets:
+        if line == '':
+            continue
+        split = line.split(" ")
+        fname = split[0]
+        sig = split[1]
+        ret_type = sig.split(":")[0]
+        arg_list = sig.split(":")[1].split(",")
+        library = split[2]
+        offset = int(split[3])
+        if library == libname:
+            output_list[offset] = {'java_name': fname, 'args': arg_list, 'ret': ret_type}
+    return output_list
+
+
+def clean_params(regex_params):
+    """
+    the regex may extract too much, if that happens fix it manually
+    """
+    open_counter = 0
+    for i,c in enumerate(regex_params):
+        if c == "(":
+            open_counter += 1
+        if c == ")" and open_counter == 0:
+            return regex_params[:i]
+        if c == ")" and not open_counter == 0:
+            open_counter -= 1
+    return regex_params
+
+
+def resolve_global(addr):
+    # try to retrieve a string from a global
+    out_str = ""
+    #addr = Address(int())
+    addr = int("0x" + addr, 16)
+    ghidra_addr = addressFactory.getAddress(hex(addr))
+    while True:
+        try:
+            b = memory.getByte(ghidra_addr)
+        except:
+            return "NONINITIALIZED"
+        print(b)
+        if b == 0:
+            break
+        out_str += chr(b)
+        addr = addr + 1
+        ghidra_addr = addressFactory.getAddress(hex(addr))
+        print(out_str)
+    return out_str
+    # 
+
+
+def resolve_parameter(parameter, param_mapping=None):
+    print("resolving parameter", parameter)
+    global_regex = r"&?DAT_([0-9a-zA-Z]+)"
+    param_regex = r"param_([0-9]+)"
+    param_match = re.match(param_regex, parameter)
+    if param_match is not None:
+        if param_mapping:
+            # map original params at call site to the parameters inside the function
+            ind = int(param_match.groups(1)[0])-1
+            if ind >= len(param_mapping):
+                return "FAILEDMAPPING"
+            return param_mapping[ind]
+        else:
+            return parameter
+    global_addr = re.match(global_regex, parameter)
+    if global_addr is not None:
+        print(global_addr)
+        global_addr = global_addr.groups(1)[0]
+        print(global_addr)
+        str_value = resolve_global(global_addr)
+        return '"' + str_value + '"'
+    return parameter
+
+
+def parse_jni_usages_symb(usages, param_mapping=None):
+    output = []
+    output_json = []
+    for usage in usages:
+        if len(usage) == 3:
+            outVar = usage[0]
+            api = usage[1]
+            parameters = clean_params(usage[2]).split(',')
+        elif len(usage) == 2:
+            outVar = ''
+            api = usage[0]
+            parameters = clean_params(usage[1]).split(',')
+        else:
+            print(usage)
+            exit(-1)
+        if parameters[0] != 'param_1':
+            # some hack to skip over
+            continue
+        resolved_params = []
+        for i,p in enumerate(parameters[1:]):
+            resolved_params.append(resolve_parameter(p, param_mapping=param_mapping))
+        if len(outVar) > 0:
+            extract_string = outVar + ' = env->'+api+'('+','.join(resolved_params)+')'
+        else:
+            outVar = None
+            extract_string = 'env->'+api+'('+','.join(resolved_params)+')'
+        output_json.append({"api": api, "parameters": resolved_params, "outVar": outVar})
+        print(extract_string)
+        output.append(extract_string)
+    return output, output_json
+
+
+def parse_jni_usages_nosymb(usages, param_mapping=None):
+    output = []
+    output_json = []
+    for usage in usages:
+        if len(usage) == 3:
+            outVar = usage[0]
+            offset = usage[1]
+            parameters = clean_params(usage[2]).split(',')
+        elif len(usage) == 2:
+            outVar = ''
+            offset = usage[0]
+            parameters = clean_params(usage[1]).split(',')
+        else:
+            print(usage)
+            exit(-1)
+        if parameters[0] != 'param_1':
+            # some hack to skip over
+            continue
+        resolved_params = []
+        for i,p in enumerate(parameters[1:]):
+            resolved_params.append(resolve_parameter(p, param_mapping=param_mapping))
+        jnifunc = convert(offset)
+        if len(outVar) > 0:
+            extract_string = outVar + ' = env->'+jnifunc+'('+','.join(resolved_params)+')'
+        else:
+            outVar = None
+            extract_string = 'env->'+jnifunc+'('+','.join(resolved_params)+')'
+        output_json.append({"api": jnifunc, "parameters": resolved_params, "outVar": outVar})
+        #print(extract_string)
+        output.append(extract_string)
+    return output, output_json
+
+
+def parse_function_call(calls):
+    output = []
+    output_json = []
+    for call in calls:
+        fname = call[0]
+        if "JNIEnv" in fname:
+            continue
+        params = call[1][1:-1].split(",")
+        if "param_1" == params[0]: # hack to only follow cases where jnienv is the first argument
+            output_json.append({"fname": fname, "params": params})
+            output.append(fname + call[1])
+    return output, output_json
+
+
+program = currentProgram
+memory = program.getMemory()
+addressFactory = currentProgram.getAddressFactory()
+binaryPath = currentProgram.getExecutablePath()
+if "/lib/arm64-v8a/" in binaryPath:
+    app = binaryPath.split("/")[-4]
+else:
+    app = ""
+filename = os.path.basename(binaryPath)
+print(binaryPath)
+print("===================jni script analyzing: " + filename + "==========================")
+
+if filename.endswith("nocov"):
+    sig_lib_path = os.path.join(args.app_path, "signatures_libraries_offsets_nocov.txt")
+else:
+    sig_lib_path = os.path.join(args.app_path, "signatures_libraries_offsets.txt")
+
+if not os.path.exists(sig_lib_path):
+    print("no singature libraries offsets file, exiting")
+    exit(0)
+
+libfunctions = parse_sig_lib_offsets(sig_lib_path, filename) # return dictioniary offset2fname+signature
+
+if len(libfunctions) == 0:
+    print("no java signatures for library, exiting")
+    exit(0)
+
+outpath = os.path.join(args.output, app + "_" + filename + ".jnifuncs")
+outpath_json = os.path.join(args.output, app + "_" + filename + ".jnifuncs.json")
+outjson = []
+outfile = open(outpath, "w")
+
+base_address = program.getImageBase().getUnsignedOffset()
+
+decompinterface = DecompInterface()
+decompinterface.openProgram(program)
+functions = program.getFunctionManager().getFunctions(True)
+func_dict = {}
+for function in list(functions):
+    func_dict[str(function)] = function
+
+for function in func_dict.values():
+    # TODO: use the offsets from signatures_libraries_offsets to do this
+    function_offset = int(function.getEntryPoint().getUnsignedOffset() - base_address)
+    #print(function_offset, function.getName())
+    if function.getName().startswith("Java"):
+        print(function)
+        print("f_offset:", function.getEntryPoint().getUnsignedOffset())
+        print(function_offset)
+    if function_offset in libfunctions:
+        java_fname = libfunctions[function_offset]["java_name"]
+        ret_type = libfunctions[function_offset]["ret"]
+        arguments = libfunctions[function_offset]["args"]
+        print("analyzing function: ", java_fname)
+        decomp_results = decompinterface.decompileFunction(function, 30, monitor)
+        outfile.write(java_fname + " " + ret_type + ":" + ",".join(arguments) + "\n")
+        if decomp_results.decompileCompleted():
+            fn_sig = decomp_results.getDecompiledFunction().getSignature()
+            outfile.write("ghidra signature:" + fn_sig+"\n")
+            fn_code = decomp_results.getDecompiledFunction().getC()
+            #print(java_fname, fn_code)
+            lines = fn_code.split("\n")
+            function_data = {"java_function": libfunctions[function_offset], "jni_api_calls": [], "status": "decompiled_success"}
+            for l in lines:
+                jni_found = False
+                jniapi_usages = re.findall(jni_regex_nosymb, l)
+                if len(jniapi_usages) > 0:
+                    jni_calls, jni_calls_json = parse_jni_usages_nosymb(jniapi_usages)
+                    for jni_call in jni_calls:
+                        outfile.write(jni_call + '\n')
+                    function_data["jni_api_calls"] = jni_calls_json
+                jniapi_usages = re.findall(jni_regex_symb, l)
+                if len(jniapi_usages) > 0:
+                    jni_calls, jni_calls_json = parse_jni_usages_symb(jniapi_usages)
+                    for jni_call in jni_calls:
+                        outfile.write(jni_call + '\n')
+                    function_data["jni_api_calls"] = jni_calls_json
+                normal_functions = re.findall(function_calls, l)
+                if len(normal_functions) > 0:
+                    # kinda disgusting, here we do the same thing as above, following param_1 down one level
+                    normal_calls, normal_calls_json = parse_function_call(normal_functions)
+                    #print("normal:", normal_functions, normal_calls)
+                    for norm_call in normal_calls:
+                        outfile.write('normal_call: ' + norm_call + '\n')
+                    for norm_call in normal_calls_json:
+                        fname = norm_call["fname"]
+                        if fname not in func_dict:
+                            continue
+                        decomp_results = decompinterface.decompileFunction(func_dict[fname], 30, monitor)
+                        if decomp_results.decompileCompleted():
+                            fn_sig = decomp_results.getDecompiledFunction().getSignature()
+                            outfile.write("ghidra signature:" + fn_sig+"\n")
+                            fn_code = decomp_results.getDecompiledFunction().getC()
+                            #print("normal code:", fn_sig, fn_code)
+                            lines2 = fn_code.split("\n")
+                            for l2 in lines2:
+                                jniapi_usages = re.findall(jni_regex_nosymb, l2)
+                                if len(jniapi_usages) > 0:
+                                    jni_calls, jni_calls_json = parse_jni_usages_nosymb(jniapi_usages, param_mapping=norm_call["params"])
+                                    for jni_call in jni_calls:
+                                        outfile.write(jni_call + '\n')
+                                    function_data["jni_api_calls"] = jni_calls_json
+                                jniapi_usages = re.findall(jni_regex_symb, l2)
+                                if len(jniapi_usages) > 0:
+                                    jni_calls, jni_calls_json = parse_jni_usages_symb(jniapi_usages, param_mapping=norm_call["params"])
+                                    for jni_call in jni_calls:
+                                        outfile.write(jni_call + '\n')
+                                    function_data["jni_api_calls"] = jni_calls_json
+            outfile.write("\n" + 0x40*"=" + "\n")      
+            outjson.append(function_data)
+        else:
+            function_data = {"java_function": libfunctions[function_offset], "jni_api_calls": [], "status": "decompiled_error"}
+            outjson.append(function_data)
+            outfile.write("decompiliation failed+\n")
+            outfile.write("\n" + 0x40*"=" + "\n")
+            print("error decompiling") 
+
+with open(outpath_json, "w") as f:
+    f.write(json.dumps(outjson))
+print("finished analysis, writing output to ", outfile.name)
+    
