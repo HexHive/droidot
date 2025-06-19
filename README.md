@@ -2,14 +2,6 @@
 
 Framework to fuzz native libraries of an Android app
 
-# Triage
-
-Information about triaging: [Triage Info](fuzzing/TRIAGE.md)
-
-# Dataset Information
-
-The dataset is available at https://7ff8-2001-62c-118-5c0-2-8ab4-0-15.ngrok-free.app/dataset.tar.gz
-
 # Fuzzing
 
 ## Requirements
