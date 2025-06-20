@@ -1,0 +1,91 @@
+FROM ubuntu:20.04
+
+ARG DEBIAN_FRONTEND=noninteractive
+
+RUN apt-get update && apt-get upgrade -y
+RUN apt-get install -y      \
+    ninja-build             \
+    openjdk-11-jdk-headless \
+    python                  \
+    python3-pip             \
+    sudo                    \
+    git                     \
+    curl                    \
+    wget                    \
+    unzip                   \
+    pkg-config
+
+RUN pip install meson==1.0.2
+
+# Rizin
+RUN cd /opt                                               && \
+    git clone https://github.com/rizinorg/rizin.git       && \
+    cd /opt/rizin                                         && \
+    git checkout 3752e24b989b45d30868624f4a973fef01466ad6 && \
+    meson build                                           && \
+    ninja -C build install
+
+# Ghidra
+RUN cd /opt                                                                                                                     && \
+    wget https://github.com/NationalSecurityAgency/ghidra/releases/download/Ghidra_9.2.3_build/ghidra_9.2.3_PUBLIC_20210325.zip && \
+    unzip ghidra_9.2.3_PUBLIC_20210325.zip                                                                                      && \
+    rm ghidra_9.2.3_PUBLIC_20210325.zip
+
+ENV GHIDRA_HOME=/opt/ghidra_9.2.3_PUBLIC
+ENV LD_LIBRARY_PATH=/usr/local/lib/x86_64-linux-gnu/
+
+# Android SDK
+RUN cd /opt && mkdir android-sdk && cd android-sdk                                          && \ 
+    wget https://dl.google.com/android/repository/commandlinetools-linux-7583922_latest.zip && \
+    unzip commandlinetools-linux-7583922_latest.zip                                         && \
+    rm commandlinetools-linux-7583922_latest.zip                                            && \
+    echo "y" | \
+        ./cmdline-tools/bin/sdkmanager \
+            --sdk_root=/opt/android-sdk "platforms;android-28" "platforms;android-29" "platforms;android-30" "platforms;android-32"
+
+ARG USER_ID=1000
+ARG GROUP_ID=1000
+
+RUN groupadd --gid ${GROUP_ID} ubuntu \
+    && useradd --uid ${USER_ID} --gid ubuntu --shell /bin/bash --create-home ubuntu
+RUN echo "ubuntu ALL=(root) NOPASSWD:ALL" > /etc/sudoers.d/ubuntu && \
+    chmod 0440 /etc/sudoers.d/ubuntu
+
+USER    ubuntu
+WORKDIR /home/ubuntu
+
+ENV PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION=python
+ENV PYTHONUNBUFFERED=1
+ENV PATH=$PATH:/home/ubuntu/.local/bin:/home/ubuntu/droidreach/bin
+
+# Other dependencies
+RUN pip install networkx==2.5.1 \
+                yapsy           \
+                angr            \
+                rzpipe          \
+                pydot==1.4.2    \
+				capstone==5.0.3 \
+                pyyaml          \
+                psutil 
+
+# Angr fix (comment bugged debug print)
+RUN sed -i '1619,1622 {s/^/#/}' /home/ubuntu/.local/lib/python3.8/site-packages/angr/analyses/cfg/cfg_emulated.py
+
+# Androguard
+RUN git clone https://github.com/androguard/androguard.git /tmp/androguard && \
+    cd /tmp/androguard                                                     && \
+    git checkout 8d091cbb309c0c50bf239f805cc1e0931b8dcddc                  && \
+    pip install .                                                          && \
+    rm -rf /tmp/androguard
+
+RUN sudo apt update && sudo apt install -y openjdk-8-jdk parallel openjdk-21-jdk
+
+RUN if [ "$(uname -m)" = "x86_64" ]; then \
+        sudo ln -sf /usr/lib/jvm/java-11-openjdk-amd64/bin/javac /etc/alternatives/javac && \
+        sudo ln -sf /usr/lib/jvm/java-11-openjdk-amd64/bin/java /etc/alternatives/java; \
+    elif [ "$(uname -m)" = "aarch64" ]; then \
+        sudo ln -sf /usr/lib/jvm/java-11-openjdk-arm64/bin/javac /etc/alternatives/javac && \
+        sudo ln -sf /usr/lib/jvm/java-11-openjdk-arm64/bin/java /etc/alternatives/java; \
+    fi
+RUN sudo ln -sf /opt/android-sdk /usr/lib/android-sdk
+RUN apt install vim nano -y
