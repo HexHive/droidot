@@ -12,7 +12,7 @@ mkdir -p results/flowdroid
 mkdir -p results/droidreach
 mkdir -p results/jucify
 
-rm target_APK/*.txt
+rm -f target_APK/*.txt
 for f in target_APK/*; do cp $f/$(basename $f).apk $f/base.apk; done
 for f in target_APK/*; do cp $f/$(basename $f).apk $f/base.apk; done
 
