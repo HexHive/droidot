@@ -13,8 +13,8 @@ mkdir -p results/droidreach
 mkdir -p results/jucify
 
 rm -f target_APK/*.txt
-for f in target_APK/*; do cp $f/$(basename $f).apk $f/base.apk; done
-for f in target_APK/*; do cp $f/$(basename $f).apk $f/base.apk; done
+for f in target_APK/*; do cp "$f/base.apk" "$f/$(basename "$f").apk" 2>/dev/null; done
+for f in target_APK/*; do cp "$f/$(basename "$f").apk" "$f/base.apk" 2>/dev/null; done
 
 total_apps=$(ls target_APK | wc -l)
 
