@@ -88,4 +88,4 @@ RUN if [ "$(uname -m)" = "x86_64" ]; then \
         sudo ln -sf /usr/lib/jvm/java-11-openjdk-arm64/bin/java /etc/alternatives/java; \
     fi
 RUN sudo ln -sf /opt/android-sdk /usr/lib/android-sdk
-RUN apt install vim nano -y
+RUN sudo apt install vim nano -y
