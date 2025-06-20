@@ -61,10 +61,10 @@ ENV PATH=$PATH:/home/ubuntu/.local/bin:/home/ubuntu/droidreach/bin
 # Other dependencies
 RUN pip install networkx==2.5.1 \
                 yapsy           \
-				angr==9.0.8021
+		angr==9.0.8021  \
                 rzpipe          \
                 pydot==1.4.2    \
-				capstone==5.0.3 \
+		capstone==5.0.3 \
                 pyyaml          \
                 psutil 
 
