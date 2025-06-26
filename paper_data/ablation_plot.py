@@ -165,8 +165,7 @@ def showmap():
                 if h2 not in tmp_lib2h_cs[applib]:
                     tmp_lib2h_cs[applib].append(h2) # we have the first function in argval
             else:
-                print("WTF", app, first_function, harness, "not in baseline")
-                exit(-1)
+                print(app, first_function, harness, "not in baseline")
     # fill up if missing
     for applib, harnesses in tmp_lib2h_bs.items():
         if applib not in tmp_lib2h_cs:
@@ -233,8 +232,8 @@ def showmap():
                         if h not in tmp_lib2h_al[applib]:
                             tmp_lib2h_al[applib].append(h) # we do have it so let's add it
                     else:
-                        print("WTF", app, partial, harness)
-                        exit(-1)
+                        print(app, partial, harness)
+                        #exit(-1)
                         pass # we don't have a harness for this partial callsequnce in either everything or cs, should not be the case
             h2 = fname_in_harnesses(first_function, app2h_av[app])
             if h2:
@@ -246,8 +245,7 @@ def showmap():
                     if h2 not in tmp_lib2h_al[applib]:
                         tmp_lib2h_al[applib].append(h2) # add first function from baseline
                 else:
-                    print("WTF", app, first_function, harness, "not in baseline")
-                    exit(-1)
+                    print(app, first_function, harness, "not in baseline")
     
     # fill up if missing
     for applib, harnesses in tmp_lib2h_cs.items():
