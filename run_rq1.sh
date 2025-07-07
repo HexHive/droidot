@@ -5,7 +5,6 @@
 # for a quick evaluation, we recommend doing 10 of them at first
 # NO_OF_APPS=100
 NO_OF_APPS=10
-app_list=$(ls target_APK | head -n $NO_OF_APPS)
 
 mkdir -p results/poirot_arg
 mkdir -p results/poirot_cs
@@ -14,6 +13,9 @@ mkdir -p results/droidreach
 mkdir -p results/jucify
 
 rm -rf target_APK/*.txt
+
+app_list=$(ls target_APK | head -n $NO_OF_APPS)
+
 for f in target_APK/*; do cp -f "$f/base.apk" "$f/$(basename "$f").apk" 2>/dev/null || true; done
 for f in target_APK/*; do cp -f "$f/$(basename "$f").apk" "$f/base.apk" 2>/dev/null || true; done
 
