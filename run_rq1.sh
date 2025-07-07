@@ -1,5 +1,5 @@
 #!/bin/bash
-set -eu
+#set -eux
 
 # there are 100 apps in the folder target_APK
 # for a quick evaluation, we recommend doing 10 of them at first
@@ -13,7 +13,7 @@ mkdir -p results/flowdroid
 mkdir -p results/droidreach
 mkdir -p results/jucify
 
-rm -f target_APK/*.txt
+rm -rf target_APK/*.txt
 for f in target_APK/*; do cp -f "$f/base.apk" "$f/$(basename "$f").apk" 2>/dev/null || true; done
 for f in target_APK/*; do cp -f "$f/$(basename "$f").apk" "$f/base.apk" 2>/dev/null || true; done
 
@@ -76,9 +76,10 @@ echo -e "\n > \x1b[31mrunning jucify\x1b[0m"
 printf '%s\n' $app_list | parallel -j 1 'cd JuCify/scripts; timeout -k 0 1800 bash main.sh -p /opt/android-sdk/platforms -f ../../target_APK/{}/{}.apk 1>../../results/jucify/{}.out 2>../../results/jucify/{}.err; a=$?; if [[ $a == 124 || $a == 137 ]]; then echo timeout {} ; elif [[ $a != 0 ]]; then echo crash $a {}; else echo ok {}; fi' |& tee jucify_out.txt
 timeout=$(grep -c 'timeout' jucify_out.txt)
 out_of_memory=$(grep -c 'OutOfMemory' jucify_out.txt)
-completed=$(grep -c 'ok ' jucify_out.txt)
-crashed=$(grep -c 'crash ' jucify_out.txt)
+completed=$(for f in results/jucify/*.out; do grep -Pzoq "Analysis elapsed time:" $f && echo $f; done | wc -l)
+crashed=$(grep Exception -R results/jucify/ | wc -l)
 empty_result=$(for f in results/jucify/*.out; do grep -Pzoq "nodes before Jucify: (\d.*)\n.*nodes after Jucify: \1" $f && echo $f; done | wc -l)
+completed=$(((completed - empty_result)))
 echo "timeout: $timeout"
 echo "out of memory: $out_of_memory"
 echo "crashed: $crashed"
