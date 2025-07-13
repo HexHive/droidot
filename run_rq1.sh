@@ -59,12 +59,12 @@ echo "completed: $completed"
 echo "empty result: $empty_result"
 
 echo -e "\n > \x1b[31mrunning droidreach\x1b[0m"
-printf '%s\n' $app_list | parallel -j 1 'timeout -k 0 1800 python3 dreach_wrapper.py ./DroidReach/bin/dreach --full-analysis target_APK/{}/{}.apk 1>results/droidreach/{}.out 2>results/droidreach/{}.err; a=$?; if [[ $a == 124 || $a == 137 ]]; then echo timeout {} ; elif [[ $a != 0 ]]; then echo crash $a {}; else echo ok {}; fi' |& tee droidreach_out.txt
+printf '%s\n' $app_list | parallel -j 1 'timeout -k 0 1800 python3 dreach_wrapper.py ./DroidReach/bin/dreach --full-analysis target_APK/{}/{}.apk 1>results/droidreach/{}.out 2>results/droidreach/{}.err; a=$?; if [[ $a == 124 || $a == 137 ]]; then echo timeout {} ; elif [[ $a != 0 ]]; then echo crash $a {}; else echo ok {}; fi; rm -rf /dev/shm/*' |& tee droidreach_out.txt
 echo "checking droidreach results"
 timeout=$(grep -c 'timeout' droidreach_out.txt)
 out_of_memory=$(grep -R 'Wrapper: Memory limit' results/droidreach -l | wc -l)
 completed=$(grep -c 'ok ' droidreach_out.txt)
-exit_code_1=$(grep -R "finished with return code 1" -l | wc -l)
+exit_code_1=$(grep -R "finished with return code 1" results/droidreach -l | wc -l)
 empty_result=$(for f in results/droidreach/*.out; do if [[ "$(cat $f | wc -l)" -eq 3 ]]; then echo $f; fi; done | wc -l)
 crashed=$(((exit_code_1 - empty_result)))
 echo "timeout: $timeout"
