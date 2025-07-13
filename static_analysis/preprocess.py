@@ -39,6 +39,7 @@ SPECIAL_LOCATIONS = {
     "com.whatsapp.w4b": ["/data/data/com.whatsapp.w4b/files/decompressed/libs.spk.zst/"]
 }
 
+PHENOM_TIMEOUT = 6*60*60
 FLOWDROID_TIMEOUT = 10*60
 
 
@@ -287,7 +288,7 @@ def extract_library_offset(appname, cleanup=True, library_specific=None, device_
     logging.info(f"{appname} nr native functions found: {nr_found_functions}, nr of native functions defined: {nr_signatures}")
 
 
-def analyze_single_apk(appname, signatures=False, libraries=False, simple_FlowDroid=False, library_specific=None, use_idNative=False, device_id=None):
+def analyze_single_apk(appname, signatures=False, libraries=False, argument_analysis=False, callsequence_analysis=False, library_specific=None, use_idNative=False, device_id=None):
     print(f"{PURPLE}[*]{NC} Analyzing {appname}")
     if not os.path.exists(os.path.join(TARGET_APK_PATH, appname)):
         print(f"{RED}[-]{NC} {os.path.join(TARGET_APK_PATH, appname)} does not exist!")
@@ -297,16 +298,40 @@ def analyze_single_apk(appname, signatures=False, libraries=False, simple_FlowDr
         print(f"{RED}[-]{NC} {os.path.join(TARGET_APK_PATH, appname, 'base.apk')} does not exist!")
         logging.error(f"{os.path.join(TARGET_APK_PATH, appname, 'base.apk')} does not exist!")
         exit(-1)
-    if simple_FlowDroid:
-        print(f"{PURPLE}[*]{NC} Starting simple flowdroid analysis for {appname}")
+    if argument_analysis:
+        print(f"{PURPLE}[*]{NC} Starting argument analysis for {appname}")
         app_path = os.path.join(TARGET_APK_PATH, appname)
-        p = subprocess.Popen(["java", "-jar", f"{BASE_PATH}/FlowdroidSimple/FlowDroidAnalysis.jar", app_path, "abcd"])
+        p = subprocess.Popen(["java", "-jar", f"{BASE_PATH}/argument-analysis/FlowDroidAnalysis.jar", app_path, "abcd"])
         try:
             p.wait(FLOWDROID_TIMEOUT)
         except subprocess.TimeoutExpired:
             print(f"{RED}[-]{NC} timeout for app: {appname} :/")
             p.kill()
-        print(f"{GREEN}[+]{NC} Finished simple flowdroid analysis for {appname}")
+        print(f"{GREEN}[+]{NC} Finished argument flowdroid analysis for {appname}")
+    if callsequence_analysis:
+        print(f"{PURPLE}[*]{NC} Starting callsequence analysis for {appname}")
+        print(BASE_PATH)
+        app_path = os.path.join(TARGET_APK_PATH, appname, "base.apk")
+        static_out = os.path.join(BASE_PATH, "callsequence-analysis", "nativesAnalysis", "CS_base.json")
+        static_final_dir = os.path.join(TARGET_APK_PATH, appname, "static_analysis")
+        static_final = os.path.join(static_final_dir, f"CS_{appname}.json")
+        #ANDROID_HOME=/opt/androidsdk/platforms/ java -cp callseq-1.0-jar-with-dependencies.jar aaa.bbb.ccc.path.analyses.AndrolibDriver -j ../../target_APK/com.tplink.skylight/base.apk
+        if not os.path.exists(static_final_dir):
+            os.system(f'mkdir -p {static_final_dir}')
+        if os.path.exists(static_out):
+            os.system(f'rm {static_out}')
+        env = os.environ.copy()
+        env["ANDROID_HOME"] = "/opt/androidsdk/platforms"
+        p = subprocess.Popen(["java", "-cp", "callseq-1.0-jar-with-dependencies.jar", "aaa.bbb.ccc.path.analyses.AndrolibDriver", "-j", app_path, "abcd"], env=env, cwd=os.path.join(BASE_PATH, "callsequence-analysis"))
+        try:
+            p.wait(FLOWDROID_TIMEOUT)
+            if os.path.exists(static_out):
+                os.system(f'cp {static_out} {static_final}')
+                os.system(f'rm {static_out}')
+        except subprocess.TimeoutExpired:
+            print(f"{RED}[-]{NC} timeout for app: {appname} :/")
+            p.kill()
+        print(f"{GREEN}[+]{NC} Finished callsequence analysis for {appname}")
     if signatures:
         extract_signatures(appname, use_idNative)
     if libraries:
@@ -322,7 +347,8 @@ if __name__ == "__main__":
     parser.add_argument("-s_idn", "--signatures_idNative", required=False, default=False, action="store_true", help="if this is set, the prepocssing script will look for static_analysis/{appname}.json for the native function signatures")
     parser.add_argument("-l", "--libraries", required=False, default=False, action="store_true", help="extract the native function library names/offset (with JNIOffset)")
     parser.add_argument("--libraries_specific", required=False, type=str, help="only extract function offsets from specific library")
-    parser.add_argument("-f", "--simple_flowdroid", required=False, default=False, action="store_true", help="run the simple flowdroid analysis on the apps")
+    parser.add_argument("--argument_analysis", required=False, default=False, action="store_true", help="run the argument analysis")
+    parser.add_argument("--callsequence_analysis", required=False, default=False, action="store_true", help="run the callsequence analysis")
     parser.add_argument("-c", "--cleanup", required=False, default=False, action="store_true", help="if set no analysis is done and instead all files created by the prepocessing are deleted")
     parser.add_argument("--init", required=False, default=False, action="store_true", help="if set the jniOffsetfinder and script are newly uploaded")
     parser.add_argument("-d", "--device", required=False, help="specify device to be used for the offset extraction task")
@@ -347,21 +373,22 @@ if __name__ == "__main__":
         device_id = adb.get_device_ids()[0]
 
     status = adb.check_device(device_id)
-    if status != "OK":
+    if status != "OK" and args.libraries:
         print(f"{RED}[ERR]{NC} device {device_id} is not functional: {status} !!ABORTING!!")
         exit(-1)
 
     if args.init:
         init_JNIOffset(device_id=device_id)
 
-    if not args.libraries and not args.signatures and not args.simple_flowdroid:
+    if not args.callsequence_analysis and not args.libraries and not args.signatures and not args.argument_analysis:
         # if no option is set we do all analysis passes
         args.libraries = True
         args.signatures = True
-        args.simple_flowdroid = True
+        args.argument_analysis = True
+        args.callsequence_analysis = True
 
     #if args.extract:
     #    extract_libs(args.target)
 
-    analyze_single_apk(args.target, args.signatures, args.libraries, simple_FlowDroid=args.simple_flowdroid, 
+    analyze_single_apk(args.target, args.signatures, args.libraries, argument_analysis=args.argument_analysis, callsequence_analysis=args.callsequence_analysis, 
         library_specific=args.libraries_specific, use_idNative=args.signatures_idNative, device_id=device_id)

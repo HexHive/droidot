@@ -55,3 +55,9 @@ RUN unzip jadx-1.5.2.zip -d /usr
 RUN apt-get install -y docker.io
 
 RUN ln -sf /opt/androidsdk/platforms /usr/lib/android-sdk/platforms
+
+RUN sdkmanager "platforms;android-19" "platforms;android-20" "platforms;android-21" \
+           "platforms;android-22" "platforms;android-23" "platforms;android-24" \
+           "platforms;android-25" "platforms;android-26" "platforms;android-27" \
+           "platforms;android-28" "platforms;android-29" "platforms;android-30" \
+           "platforms;android-31" "platforms;android-32"
