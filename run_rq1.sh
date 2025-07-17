@@ -6,6 +6,17 @@
 # NO_OF_APPS=100
 NO_OF_APPS=10
 
+if [ -d "results" ]; then
+       backup_dir="results_$(date +%s)"
+       mkdir $backup_dir
+       mv results/ "$backup_dir/"
+       mv poirot_arg_out.txt "$backup_dir/"
+       mv poirot_cs_out.txt "$backup_dir/"
+       mv flowdroid_out.txt "$backup_dir/"
+       mv droidreach_out.txt "$backup_dir/"
+       mv jucify_out.txt "$backup_dir/"
+fi
+
 mkdir -p results/poirot_arg
 mkdir -p results/poirot_cs
 mkdir -p results/flowdroid
